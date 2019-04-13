@@ -25,7 +25,7 @@ class Node(object):
         self.id = hashIt(str(self.address[0]) + ":" +  str(self.address[1]))
 
         self.succ = {'id':self.id,'addr' : address}
-        self.pred = None
+        self.pred = {'id':self.id,'addr' : address}
 
         for i in range(m):
             self.fingerTable.append(
@@ -77,6 +77,18 @@ class Node(object):
                 self.fingerTable[i]['succ'] = succ_obj
                 print(f"Update in finger table: {self.fingerTable[i]}")
 
+    def closestPrecedingNode(self,nid):
+        succ_id = self.succ['id']
+
+        if(self.id > succ_id):
+            if ((2**k) - succ_id - nid) > (nid - self.id):
+                return self.getNodeObj()
+        else:
+            if (nid - self.id) > (succ_id - nid):
+                return self.getSucc()
+            else:
+                return self.getNodeObj()
+
 
 
 
@@ -97,8 +109,8 @@ def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
             print(msg)
             new_node = json.loads(msg)
             findSuccessor(new_node_socket,new_node,node_object)
-            node_socket.shutdown(SHUT_RDWR)
-            node_socket.close()
+            # node_socket.shutdown(SHUT_RDWR)
+            # node_socket.close()
             print("Find Successor call complete")
         elif "I am your predecessor" in msg:
             print(f"{node_object.getId()} has a new predecessor : {new_node['id']}")
@@ -106,17 +118,27 @@ def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
             new_node_socket.send("Got it".encode())
             current_nodes+=1
             break
+    # node_socket.shutdown(SHUT_RDWR)
+    # node_socket.close()
+    return
 
 def listenForNewNodes(node_socket,node_object):
     print("Listening for new connections")
     while True:
+        # node_socket.listen()
         try:
             new_node_socket,new_node_addr = node_socket.accept()
             print(f"New Connection {new_node_addr}")
-            Thread(target=handleNewNode,args=(node_socket,new_node_socket,new_node_addr,node_object)).start()
+            t = Thread(target=handleNewNode,args=(node_socket,new_node_socket,new_node_addr,node_object))
+            t.start()
+            t.join()
+            # node_socket.shutdown(SHUT_RDWR)
+            # node_socket.close()
         except OSError:
             pass
             # print(OSError)
+
+
 
 def findSuccessor(node_socket,new_node_obj,bootstrap_node):
     nid = new_node_obj['id']
@@ -124,37 +146,46 @@ def findSuccessor(node_socket,new_node_obj,bootstrap_node):
     print(f"Finding Successor for {addr} with id: {nid}")
     bnode_id = bootstrap_node.getId()
     bnode_succ_id = bootstrap_node.getSucc()['id']
-    bnode_pred = bootstrap_node.getPred()
+    bnode_pred_id = bootstrap_node.getPred()['id']
+    successor = None
     while True:
-        print('Inside')
-        if  current_nodes == 1:
-            new_node_succ = bootstrap_node.getAddr()
-            print(f"Successor found for {addr}")
-            msg = f"YourSuccessor:"+json.dumps(bootstrap_node.getNodeObj()) + ";"
-            node_socket.send(msg.encode())
-            return
-        elif bnode_pred != None and (nid > bnode_pred['id'] and nid <= bnode_id):
-            new_node_succ = bootstrap_node.getAddr()
-            print(f"Successor found for {addr}")
-            msg = f"YourSuccessor:"+json.dumps(bootstrap_node.getNodeObj()) + ";"
-            node_socket.send(msg.encode())
-            return
-        elif (nid > bnode_id and nid <= bnode_succ_id):
-            new_node_succ = bootstrap_node.getSucc()['addr']
-            print(f"Successor found for {addr}")
-            msg = f"YourSuccessor:"+json.dumps(bootstrap_node.getSucc()) + ";"
-            node_socket.send(msg.encode())
-            return
+        print(f'Finding Successor for {nid}')
+        if (nid > bnode_id and nid <= bnode_succ_id):
+            successor = bootstrap_node.getSucc()
+            break
+        elif bnode_id == bnode_succ_id or nid == bnode_id:
+            successor = bootstrap_node.getNodeObj()
+            break
+        elif bnode_succ_id == bnode_pred_id:
+            if bnode_succ_id >= nid:
+                if bnode_id > bnode_succ_id or bnode_id < nid:
+                    successor = bootstrap_node.getNodeObj()
+                    break
+            else:
+                if (bnode_id > nid and bnode_id > bnode_succ_id) or (bnode_id < nid and bnode_id < bnode_succ_id):
+                    successor = bootstrap_node.getSucc()
+                    break
+                else:
+                    successor = bootstrap_node.getNodeObj()
+                    break
         else:
-            bootstrap_fingerTable = bootstrap_node.getFingerTable()
-            for entry in list(reversed(bootstrap_fingerTable)):
-                if entry['succ']['id'] in range(bootstrap_node.getId(),nid):
-                    node_socket.close()
-                    print(f"{new_node_obj} trying to connect with {entry['succ']}")
-                    node_socket.connect(entry['succ']['addr'])
-                    msg = "NodeJoin:" + json.dumps(new_node_obj) + ";"
-                    node_socket.send(msg.encode())
-                    return
+            closest_node = bootstrap_node.closestPrecedingNode(nid)
+            if closest_node['id'] == nid:
+                successor = bootstrap_node.getSucc()
+                break
+            elif closest_node['id'] == bnode_id:
+                successor = bootstrap_node.getNodeObj()
+                break
+            else:
+                print(f"Forwarding NodeJoin request to {closest_node['id']}")
+                node_socket.connect(tuple(closest_node['addr']))
+                msg = "NodeJoin:" + json.dumps(closest_node) + ";"
+                node_socket.send(msg.encode())
+                return
+    print(f"Found successor for {nid} : {successor}")
+    msg = "YourSuccessor:" + json.dumps(successor) + ";"
+    node_socket.send(msg.encode())
+    return
 
 
 
