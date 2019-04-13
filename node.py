@@ -1,8 +1,11 @@
 import sys,os
-from socket import AF_INET, socket, SOCK_STREAM
+from socket import AF_INET, SOCK_STREAM, SHUT_RDWR
+from socket import socket as Socket
+import socket
 from hashlib import sha1
 from threading import Thread
 import json
+from time import sleep
 
 ENCODING = 'utf-8'
 BUFFSIZE = 512
@@ -94,35 +97,36 @@ def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
             print(msg)
             new_node = json.loads(msg)
             findSuccessor(new_node_socket,new_node,node_object)
+            node_socket.shutdown(SHUT_RDWR)
+            node_socket.close()
             print("Find Successor call complete")
-            # new_node_socket.close()
-            # return
         elif "I am your predecessor" in msg:
             print(f"{node_object.getId()} has a new predecessor : {new_node['id']}")
             node_object.setPred(new_node)
             new_node_socket.send("Got it".encode())
             current_nodes+=1
-            # new_node_socket.close()
-            # break
-            return
-    # new_node_socket.close()
+            break
 
 def listenForNewNodes(node_socket,node_object):
+    print("Listening for new connections")
     while True:
         try:
             new_node_socket,new_node_addr = node_socket.accept()
             print(f"New Connection {new_node_addr}")
             Thread(target=handleNewNode,args=(node_socket,new_node_socket,new_node_addr,node_object)).start()
         except OSError:
-            print(OSError)
+            pass
+            # print(OSError)
 
 def findSuccessor(node_socket,new_node_obj,bootstrap_node):
     nid = new_node_obj['id']
     addr = new_node_obj['addr']
+    print(f"Finding Successor for {addr} with id: {nid}")
     bnode_id = bootstrap_node.getId()
     bnode_succ_id = bootstrap_node.getSucc()['id']
     bnode_pred = bootstrap_node.getPred()
     while True:
+        print('Inside')
         if  current_nodes == 1:
             new_node_succ = bootstrap_node.getAddr()
             print(f"Successor found for {addr}")
@@ -169,7 +173,8 @@ if __name__ == "__main__":
         current_nodes+=1
         print(f"My ID: {node.getId()}")
 
-        node_socket = socket(AF_INET,SOCK_STREAM)
+        node_socket = Socket(AF_INET,SOCK_STREAM)
+        node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         node_socket.bind((host,port))
         node_socket.listen(maxNodes)
         print(f"Bootstrap node created. Listening at {host}:{port}")
@@ -183,7 +188,8 @@ if __name__ == "__main__":
         m = int(args[2])
         maxNodes = (1<<m-1)
 
-        node_socket = socket(AF_INET,SOCK_STREAM)
+        node_socket = Socket(AF_INET,SOCK_STREAM)
+        node_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         node_socket.bind(('127.0.0.1',0))
         host,port = node_socket.getsockname()
         print(host,port)
@@ -224,13 +230,23 @@ if __name__ == "__main__":
                             print(f"Successfully entered the network via {succ_addr}")
                             node.setSucc(succ_obj)
                             node.updateFingerTable(succ_obj)
+                            node_socket.shutdown(SHUT_RDWR)
                             node_socket.close()
                             break
                     except:
                         print("Error 1")
             break
-            node_socket.close()
-            node_socket.listen(maxNodes)
+
+        node_socket = Socket(AF_INET,SOCK_STREAM)
+
+        while True:
+            try:
+                node_socket.bind((host,port))
+                node_socket.listen()
+                break
+            except OSError:
+                sleep(2)
+                # print("Address in use")
         Thread(target=listenForNewNodes,args=(node_socket,node)).start()
             # except:
                 # print("Error 2")
