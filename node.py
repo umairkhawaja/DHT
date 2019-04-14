@@ -81,7 +81,7 @@ class Node(object):
         succ_id = self.succ['id']
 
         if(self.id > succ_id):
-            if ((2**k) - succ_id - nid) > (nid - self.id):
+            if ((2**m) - succ_id - nid) > (nid - self.id):
                 return self.getNodeObj()
         else:
             if (nid - self.id) > (succ_id - nid):
@@ -96,31 +96,59 @@ def hashIt(name):
     global maxNodes
     return int(sha1(name.encode()).hexdigest(),16) % maxNodes
 
-
+newNode = None
 def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
-    global current_nodes
-    newNode = None
+    global newNode
     while True:
+        # print("Listening for new messages")
         msg = new_node_socket.recv(BUFFSIZE).decode()
+        if msg != None and msg != '':
+            print(msg)
         if "NodeJoin" in msg:
             i = msg.find('{')
             j = msg.find(';')
             msg = msg[i:j]
-            print(msg)
-            new_node = json.loads(msg)
-            findSuccessor(new_node_socket,new_node,node_object)
-            # node_socket.shutdown(SHUT_RDWR)
-            # node_socket.close()
+            newNode = json.loads(msg)
+
+            findSuccessor(new_node_socket,newNode,node_object)
+            print(f"newNode value1: {newNode}")
+
+            # return
             print("Find Successor call complete")
-        elif "I am your predecessor" in msg:
-            print(f"{node_object.getId()} has a new predecessor : {new_node['id']}")
-            node_object.setPred(new_node)
+        if "I am your predecessor" in msg:
+            print(f"newNode value2: {newNode}")
+            old_pred = node_object.getPred()
+            if old_pred != None and old_pred != node_object.getNodeObj():
+                connect_socket = Socket(AF_INET,SOCK_STREAM)
+                connect_socket.bind(('',0))
+                while True:
+                    try:
+                        connect_socket.connect(tuple(old_pred['addr']))
+                        break
+                    except:
+                        sleep(2)
+                msg = "YouHaveNewSuccessor:" + json.dumps(newNode) + ";"
+                connect_socket.send(msg.encode())
+                connect_socket.shutdown(SHUT_RDWR)
+                connect_socket.close()
+                
+            node_object.setPred(newNode)
+            print(f"{node_object.getId()} has a new predecessor : {newNode['id']}")
             new_node_socket.send("Got it".encode())
-            current_nodes+=1
-            break
-    # node_socket.shutdown(SHUT_RDWR)
-    # node_socket.close()
-    return
+            return
+        if "YouHaveNewSuccessor" in msg:
+            print(f"newNode value3: {newNode}")
+            i = msg.find('{')
+            j = msg.find(';')
+            msg = msg[i:j]
+            print(msg)
+            new_succ = json.loads(msg)
+            node_object.setSucc(new_succ)
+            node_object.updateFingerTable(new_succ)
+            # break
+            return
+
+    # return
 
 def listenForNewNodes(node_socket,node_object):
     print("Listening for new connections")
@@ -178,10 +206,14 @@ def findSuccessor(node_socket,new_node_obj,bootstrap_node):
                 break
             else:
                 print(f"Forwarding NodeJoin request to {closest_node['id']}")
-                node_socket.connect(tuple(closest_node['addr']))
-                msg = "NodeJoin:" + json.dumps(closest_node) + ";"
-                node_socket.send(msg.encode())
-                return
+                while True:
+                    try:
+                        node_socket.connect(tuple(closest_node['addr']))
+                        msg = "NodeJoin:" + json.dumps(closest_node) + ";"
+                        node_socket.send(msg.encode())
+                        return
+                    except:
+                        sleep(2)
     print(f"Found successor for {nid} : {successor}")
     msg = "YourSuccessor:" + json.dumps(successor) + ";"
     node_socket.send(msg.encode())
@@ -210,6 +242,7 @@ if __name__ == "__main__":
         node_socket.listen(maxNodes)
         print(f"Bootstrap node created. Listening at {host}:{port}")
         Thread(target=listenForNewNodes,args=(node_socket,node)).start()
+        #GET/PUT menu goes here
 
 
 
@@ -277,11 +310,9 @@ if __name__ == "__main__":
                 break
             except OSError:
                 sleep(2)
-                # print("Address in use")
+
         Thread(target=listenForNewNodes,args=(node_socket,node)).start()
-            # except:
-                # print("Error 2")
-                
+        #GET/PUT menu goes here
 
 
 
