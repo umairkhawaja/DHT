@@ -88,8 +88,38 @@ class Node(object):
                 return self.getSucc()
             else:
                 return self.getNodeObj()
+        # for entry in list(reversed(self.fingerTable)):
+        #     entry_id = entry['succ']['id']
+        #     if entry_id > self.id and entry_id < nid:
+        #         return entry['succ']
+        # return self.getNodeObj()
+    
 
 
+def sendMsg(fromID,to_addr,msg,wait):
+    s = Socket(AF_INET,SOCK_STREAM)
+    s.bind(('',0))
+    while True:
+        try:
+            s.connect(tuple(to_addr))
+            break
+        except:
+            sleep(2)
+    s.send(msg.encode())
+    if wait == 0:
+        s.shutdown(SHUT_RDWR)
+        s.close()
+        return
+    else:
+        while True:
+            try:
+                msg = s.recv(BUFFSIZE).decode()
+                s.shutdown(SHUT_RDWR)
+                s.close()
+                return msg
+            except:
+                sleep(1)
+    
 
 
 def hashIt(name):
@@ -100,7 +130,7 @@ newNode = None
 def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
     global newNode
     while True:
-        # print("Listening for new messages")
+        print("Listening for new messages")
         msg = new_node_socket.recv(BUFFSIZE).decode()
         if msg != None and msg != '':
             print(msg)
@@ -111,14 +141,23 @@ def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
             newNode = json.loads(msg)
 
             findSuccessor(new_node_socket,newNode,node_object)
-            print(f"newNode value1: {newNode}")
-
-            # return
             print("Find Successor call complete")
         if "I am your predecessor" in msg:
-            print(f"newNode value2: {newNode}")
+            print("Got a predecessor request")
             old_pred = node_object.getPred()
-            if old_pred != None and old_pred != node_object.getNodeObj():
+            
+            node_object.setPred(newNode)
+            print(f"{node_object.getId()} has a new predecessor : {newNode['id']}")
+            new_node_socket.send("Got it".encode())
+
+            if node_object.getSucc() == node_object.getNodeObj():
+                print(f"{node_object.getId()} has a successor : {newNode['id']}")
+                node_object.setSucc(newNode)
+                node_object.updateFingerTable(newNode)
+                
+            # elif (old_pred == None) or (newNode['id'] > old_pred['id'] and newNode['id'] < node_object.getId()):
+            
+            elif old_pred != None and old_pred != node_object.getNodeObj():
                 connect_socket = Socket(AF_INET,SOCK_STREAM)
                 connect_socket.bind(('',0))
                 while True:
@@ -132,17 +171,13 @@ def handleNewNode(node_socket,new_node_socket,new_node_addr,node_object):
                 connect_socket.shutdown(SHUT_RDWR)
                 connect_socket.close()
                 
-            node_object.setPred(newNode)
-            print(f"{node_object.getId()} has a new predecessor : {newNode['id']}")
-            new_node_socket.send("Got it".encode())
             return
         if "YouHaveNewSuccessor" in msg:
-            print(f"newNode value3: {newNode}")
             i = msg.find('{')
             j = msg.find(';')
             msg = msg[i:j]
-            print(msg)
             new_succ = json.loads(msg)
+            print(f"{node_object.getId()} has a new Successor : {new_succ['id']}")
             node_object.setSucc(new_succ)
             node_object.updateFingerTable(new_succ)
             # break
@@ -279,15 +314,23 @@ if __name__ == "__main__":
                 succ_id = succ_obj['id']
                 succ_addr = tuple(succ_obj['addr'])
                 print(f"Successor addr: {succ_addr}")
-                if succ_addr != (chord_host,chord_port):
+                if tuple(succ_addr) != (chord_host,chord_port):
                     node_socket.close()
                     node_socket.connect(succ_addr)
-                    print("Connected to successor")
+                    print(f"Connected to successor : {succ_id}")
+                    # while True:
+                    #     try:
+                    #         break
+                    #     except:
+                    #         pass
+                            # sleep(1)
+
                 msg = "I am your predecessor:" + json.dumps(node.getNodeObj()) + ";"
                 node_socket.send(msg.encode())
                 print(f"Sent message: {msg}")
                 while True:
                     try:
+                        print("Waiting for response")
                         res = node_socket.recv(BUFFSIZE).decode()
                         print(f"Got res: {res}")
                         if res == "Got it":
