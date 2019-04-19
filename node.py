@@ -50,7 +50,7 @@ def sendMsg(to_addr,msg):
 def inRange(key,left,right):
     current = left
 
-    while(left != right):
+    while(current != right):
         # print(f"Comparing {current} with {key}")
         if key == current:
             return True
