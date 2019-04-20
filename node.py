@@ -7,21 +7,22 @@ from threading import Thread
 import json
 from time import sleep
 import os
+from glob import glob
 import pprint
 
 '''
     GLOBAL VARIABLES
 
 '''
-
 ENCODING = 'utf-8'
 BUFFSIZE = 512
-
 m = 0
 maxNodes = 0
 # host = '127.0.0.1'
 
-
+'''
+    HELPER FUNCTIONS
+'''
 def genMsg(title,obj,from_addr):
     return json.dumps({
         'title' : title,
@@ -51,7 +52,6 @@ def inRange(key,left,right):
     current = left
 
     while(current != right):
-        # print(f"Comparing {current} with {key}")
         if key == current:
             return True
         current = (current + 1) % maxNodes
@@ -69,6 +69,9 @@ class Node(object):
         self.object = None
         self.pred = None
         self.succ = None
+        self.sentPred = False
+        self.sentSucc = False
+        self.exit = False
 
     def initialiseNew(self,bootstrap_addr):
         self.socket = Socket(AF_INET,SOCK_STREAM)
@@ -78,14 +81,15 @@ class Node(object):
         self.files = {}
         self.fingerTable = []
         self.id = hashIt(str(self.address))
-        # self.id = hashIt(str(self.address[0]) + ":" +  str(self.address[1]))
         print(f"My ID: {self.id}")
         print(f"My Address: {self.address}")
         self.object = {'id' : self.id , 'addr' : self.address}
-        
+        self.scanFolder()        
         Thread(target=self.startListening).start()
         self.joinNetwork(bootstrap_addr)
         Thread(target=self.stablize).start()
+        
+        # self.findOwner()
 
         # for i in range(m):
         #     self.fingerTable.append(
@@ -106,7 +110,6 @@ class Node(object):
         self.files = {}
         self.fingerTable = []
         self.id = hashIt(str(self.address))
-        # self.address[0]) + ":" +  str(self.address[1]
         print(f"My ID: {self.id}")
         self.object = {'id' : self.id , 'addr' : self.address}
         self.succ = {'id':self.id,'addr' : self.address}
@@ -115,11 +118,11 @@ class Node(object):
         self.socket = Socket(AF_INET,SOCK_STREAM)
         self.socket.bind(tuple(self.address))
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-
-
+        self.scanFolder()
         Thread(target=self.startListening).start()
-        Thread(target=self.stablize).start()        
+        Thread(target=self.stablize).start()    
+        sleep(60)
+        self.leave()
         # for i in range(m):
         #     self.fingerTable.append(
         #         {
@@ -132,8 +135,15 @@ class Node(object):
         #     )
         return
     
-    def getFile(self,key):
-        return self.files[key]
+    def scanFolder(self):
+        files = glob(os.getcwd() + '/**/*',recursive=True)
+        files.remove(os.getcwd() + '/node.py')
+        # pprint.pprint(files)
+        self.files = {hashIt( path.split('/')[-1]  ):path for path in files}
+
+    def findOwner(self):
+        notMyFiles = { (key if not (key < self.id and key > self.pred['id']) else key) : (value if not (key < self.id and key > self.pred['id']) else value) for key,value in self.files.items() }
+        pprint.pprint(notMyFiles)
     
     def addFile(self,filename): # TO BE IMPLEMENTED
         self.files[key] = file
@@ -158,9 +168,27 @@ class Node(object):
     #         else:
     #             return self.getNodeObj()
 
+
     '''
         FUNCTIONS FOR THE "SERVER" i.e. Nodes already in the network
     '''
+    def leave(self):
+        print(f"{self.id} is leaving...")
+        # TRANSFER FILES GOES HERE 
+        self.exit = True
+        msg = genMsg("I am your predecessor",self.pred,self.address)
+        sendMsg(self.succ['addr'],msg)
+        msg = genMsg("Your Successor",self.succ,self.address)
+        sendMsg(self.pred['addr'],msg)
+        
+        try;
+            self.socket.shutdown(SHUT_RDWR)
+            self.socket.close()
+            exit(1)
+        except:
+            pass
+        
+
     def handleNodeJoin(self,msg_obj):
         new_node = msg_obj['payload']
         self.findSuccessor(new_node)
@@ -173,12 +201,11 @@ class Node(object):
 
         if self.pred == None and self.succ == self.object:
             successor = self.object
-            # self.succ = new_node
         elif inRange(new_node_id,self.id,self.succ['id']):
             successor = self.succ
         else:
             msg = genMsg("Node Join",new_node,new_node_addr)
-            print(f"Forwarding request to : {self.succ['id']}")
+            # print(f"Forwarding request to : {self.succ['id']}")
             sendMsg(self.succ['addr'],msg)
             return
 
@@ -192,10 +219,9 @@ class Node(object):
     def startListening(self):
         print(f"Listening for incoming messages at {self.address}")
         self.socket.listen()
-        while True:
+        while True and self.exit == False:
             try:
                 client_socket,client_address = self.socket.accept()
-                # print(f"New connection: {client_address}")
                 Thread(target=self.handleRequests,args=(client_socket,)).start()
             except KeyboardInterrupt:
                 self.socket.shutdown(SHUT_RDWR)
@@ -205,21 +231,18 @@ class Node(object):
 
     def handlePredReq(self,msg_obj):
         pred_node = msg_obj['payload']
-        # print(f"Got predecessor request from: {pred_node}")
-        # self.pred = pred_node
-        if self.pred == None:
-            self.pred = pred_node
-        else:
-            msg = genMsg("Your Successor",pred_node,self.address)
-            sendMsg(self.pred['addr'],msg)
-            self.pred = pred_node
-        print(f"My Predecessor is {self.pred}")
+        self.pred = pred_node
+        # if self.pred == None:
+        #     self.pred = pred_node
+        # else:
+        #     msg = genMsg("Your Successor",pred_node,self.address)
+        #     sendMsg(self.pred['addr'],msg)
+        #     self.pred = pred_node
+        # print(f"My Predecessor is {self.pred}")
     
     def checkSuccessor(self,msg_obj):
         successor_pred = msg_obj['payload']
-        # print(f"My Successor's predecessor: {successor_pred}")
         if successor_pred != None and int(successor_pred['id']) != self.id:
-            # print(f"My successor had a new predecessor: {successor_pred}")
             self.succ = successor_pred
             msg = genMsg("I am your predecessor",self.object,self.address)
             sendMsg(successor_pred['addr'],msg)
@@ -229,31 +252,34 @@ class Node(object):
         msg = client_socket.recv(BUFFSIZE).decode()
         msg_obj = json.loads(msg)
         msg_title = msg_obj['title']
+        
         if "Node Join" in msg_title:
             Thread(target=self.handleNodeJoin,args=(msg_obj,)).start()
+        
         elif "Find Successor" in msg_title:
             Thread(target=self.findSuccessor,args=(msg_obj,)).start()
+        
         elif "I am your predecessor" in msg_title:
             Thread(target=self.handlePredReq,args=(msg_obj,)).start()
+        
         elif "Your Successor" in msg_title:
             print(f"Successor set: {msg_obj['payload']}")
-            
             self.succ = msg_obj['payload']
             msg = genMsg("I am your predecessor",self.object,self.address)
             sendMsg(self.succ['addr'],msg)
 
         elif "Send Predecessor" in msg_title:
-            
             msg = genMsg("Requested Predecessor",self.pred,self.address)
             sendMsg(msg_obj['from'],msg)
 
         elif "Requested Predecessor" in msg_title:
             Thread(target=self.checkSuccessor,args=(msg_obj,)).start()
+
             
 
     def stablize(self):
         sleep(15)
-        while True:
+        while True and self.exit == False:
             msg = genMsg("Send Predecessor",{},self.address)
             sendMsg(self.succ['addr'],msg)
             state = {
