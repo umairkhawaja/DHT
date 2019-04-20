@@ -8,14 +8,14 @@ import json
 from time import sleep
 import os
 from glob import glob
-import pprint
+from pprint import pprint
 
 '''
     GLOBAL VARIABLES
 
 '''
 ENCODING = 'utf-8'
-BUFFSIZE = 512
+BUFFSIZE = 1024
 m = 0
 maxNodes = 0
 # host = '127.0.0.1'
@@ -57,7 +57,6 @@ def inRange(key,left,right):
         current = (current + 1) % maxNodes
     return False
     
-
 class Node(object):
 
     def __init__(self):
@@ -121,7 +120,7 @@ class Node(object):
         self.scanFolder()
         Thread(target=self.startListening).start()
         Thread(target=self.stablize).start()    
-        sleep(60)
+        sleep(30)
         self.leave()
         # for i in range(m):
         #     self.fingerTable.append(
@@ -136,18 +135,56 @@ class Node(object):
         return
     
     def scanFolder(self):
-        files = glob(os.getcwd() + '/**/*',recursive=True)
+        # files = glob(os.getcwd() + '/**/*',recursive=True)
+        files = glob(os.getcwd() + '/*')
         files.remove(os.getcwd() + '/node.py')
-        # pprint.pprint(files)
+        # pprint(files)
         self.files = {hashIt( path.split('/')[-1]  ):path for path in files}
 
     def findOwner(self):
         notMyFiles = { (key if not (key < self.id and key > self.pred['id']) else key) : (value if not (key < self.id and key > self.pred['id']) else value) for key,value in self.files.items() }
-        pprint.pprint(notMyFiles)
+        pprint(notMyFiles)
     
-    def addFile(self,filename): # TO BE IMPLEMENTED
-        self.files[key] = file
 
+    def sendFile(self,path,addr):
+        sock = Socket(AF_INET,SOCK_STREAM)
+        sock.bind(('',0))
+        filename = path.split('/')[-1]
+        while True:
+            try:
+                sock.connect(tuple(addr))
+                break
+            except:
+                pass
+        msg = genMsg("Incoming file",filename,self.address)
+        sock.send(msg.encode())
+        res = sock.recv(BUFFSIZE).decode()
+
+        if "Send it" in res:
+            with open(path,'rb') as f:
+                sock.sendfile(f,0)
+            sock.shutdown(SHUT_RDWR)
+            sock.close()
+            print(f"Sent file : {filename} to {addr}")
+
+    def receiveFile(self,filename,sock):
+        sock.send("Send it".encode())
+        chunk = sock.recv(BUFFSIZE)
+        data = chunk
+        while chunk:
+            # print("Waiting for chunk")
+            chunk = sock.recv(BUFFSIZE)
+            # print(f"Chunk received: {chunk}")
+            data += chunk
+            # with open(filename,'wb') as f:
+                # if chunk:
+                    # print("Got chunk")
+                    # f.write(chunk)
+                # else:
+                    # break
+        with open(filename,'wb') as f:
+            f.write(data)
+        print(f"File received and written: {filename}")
     
     # def updateFingerTable(self,succ_obj):
     #     for i in range(m):
@@ -174,6 +211,10 @@ class Node(object):
     '''
     def leave(self):
         print(f"{self.id} is leaving...")
+        for key in self.files:
+            path = self.files[key]
+            if os.path.isfile(path):
+                self.sendFile(path,self.succ['addr'])
         # TRANSFER FILES GOES HERE 
         self.exit = True
         msg = genMsg("I am your predecessor",self.pred,self.address)
@@ -181,7 +222,7 @@ class Node(object):
         msg = genMsg("Your Successor",self.succ,self.address)
         sendMsg(self.pred['addr'],msg)
         
-        try;
+        try:
             self.socket.shutdown(SHUT_RDWR)
             self.socket.close()
             exit(1)
@@ -228,6 +269,9 @@ class Node(object):
                 self.socket.close()
                 print("Terminating...")
                 exit(1)
+            except OSError:
+                if self.exit == True:
+                    print("Exiting...")
 
     def handlePredReq(self,msg_obj):
         pred_node = msg_obj['payload']
@@ -274,7 +318,10 @@ class Node(object):
 
         elif "Requested Predecessor" in msg_title:
             Thread(target=self.checkSuccessor,args=(msg_obj,)).start()
-
+        
+        elif "Incoming file" in msg_title:
+            filename = msg_obj['payload']
+            Thread(target=self.receiveFile,args=(filename,client_socket)).start()
             
 
     def stablize(self):
@@ -287,7 +334,7 @@ class Node(object):
                 'Successor' : self.succ,
                 'Predecessor' : self.pred,
             }
-            pprint.pprint(state)
+            pprint(state)
             sleep(5)
 
     '''
