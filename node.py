@@ -68,7 +68,7 @@ class Node(object):
         self.sentPred = False
         self.sentSucc = False
         self.exit = False
-        self.succList = []
+        self.fingerTable = [{} for i in range(m)]
         self.succListIndex = 0
         self.super_succ = None
         self.scanFolder()
@@ -78,7 +78,6 @@ class Node(object):
         self.socket.bind((bootstrap_addr[0],0))
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.address = self.socket.getsockname()
-        self.fingerTable = []
         self.id = hashIt(str(self.address))
         print(f"My ID: {self.id}")
         print(f"My Address: {self.address}")
@@ -87,12 +86,12 @@ class Node(object):
         Thread(target=self.startListening).start()
         self.joinNetwork(bootstrap_addr)
         Thread(target=self.stablize).start()
+        Thread(target=self.fixFingers).start()
         Thread(target=self.checkSuccConnection()).start()
         return
 
     def initialiseBootstrap(self,addr):
         self.address = addr
-        self.fingerTable = []
         self.id = hashIt(str(self.address))
         print(f"My ID: {self.id}")
         self.object = {'id' : self.id , 'addr' : self.address}
@@ -105,7 +104,50 @@ class Node(object):
         Thread(target=self.menu).start()
         Thread(target=self.startListening).start()
         Thread(target=self.stablize).start()
+        Thread(target=self.fixFingers).start()
         Thread(target=self.checkSuccConnection()).start()
+        return
+    
+    
+    def fixFingers(self):
+        nxt = 0
+        sleep(10)
+        while True and self.exit == False:
+            sleep(5)
+            nxt+=1
+
+            if nxt > m:
+                nxt = 1 
+            
+            payload = {
+                'id' : int(self.id) + 2**(nxt-1),
+                'index' : nxt,
+                'query_addr' : self.address,
+            }
+            
+            msg = genMsg("Fix Find Successor",payload,self.address)
+            sendMsg(tuple(self.succ['addr']),msg)
+
+
+    def fix_find_succ(self,payload):
+        query_id = payload['id']
+        query_addr = payload['query_addr']
+        successor = None
+
+        if self.pred == None and self.succ == self.object:
+            successor = self.object
+        elif inRange(query_id,self.id,self.succ['id']):
+            successor = self.succ
+        else:
+            msg = genMsg("Fix Find Successor",payload,self.address)
+            sendMsg(self.succ['addr'],msg)
+            return
+        res_payload = {
+            'succ' : successor,
+            'index' : payload['index']
+        }
+        msg = genMsg("Fix Found Successor",res_payload,self.address)
+        sendMsg(query_addr,msg)
         return
     
     def scanFolder(self):
@@ -141,7 +183,8 @@ class Node(object):
             'ID' : self.id,
             'Successor' : self.succ,
             'Predecessor' : self.pred,
-            'Super Successor' : self.super_succ
+            # 'Super Successor' : self.super_succ,
+            'Finger Table' : self.fingerTable
             }
         pprint(state)
 
@@ -215,6 +258,7 @@ class Node(object):
                 sendMsg(self.succ['addr'],msg)
                 sleep(5)
                 self.populateSuccessorList()
+                # self.fixFingers()
             except:
                 sleep(2)
 
@@ -394,76 +438,89 @@ class Node(object):
         try:
             msg_obj = json.loads(msg)
             msg_title = msg_obj['title']
+            
+            if "Node Join" == msg_title:
+                Thread(target=self.handleNodeJoin,args=(msg_obj,)).start()
+            
+            elif "Find Successor" == msg_title:
+                Thread(target=self.findSuccessor,args=(msg_obj,)).start()
+            
+            elif "I am your predecessor" == msg_title:
+                Thread(target=self.handlePredReq,args=(msg_obj,)).start()
+            
+            elif "Your Successor" == msg_title:
+                self.succ = msg_obj['payload']
+                msg = genMsg("I am your predecessor",self.object,self.address)
+                sendMsg(self.succ['addr'],msg)
+
+            elif "Send Predecessor" == msg_title:
+                msg = genMsg("Requested Predecessor",self.pred,self.address)
+                sendMsg(msg_obj['from'],msg)
+
+            elif "Requested Predecessor" == msg_title:
+                Thread(target=self.checkSuccessor,args=(msg_obj,)).start()
+            
+            elif "Incoming file" == msg_title:
+                filename = msg_obj['payload']
+                Thread(target=self.receiveFile,args=(filename,client_socket)).start()
+            
+            elif "Send Successor" == msg_title:
+                reply = genMsg("Requested Successor",self.succ,self.address)
+                sendMsg(msg_obj['from'],reply)
+            
+            elif "Requested Successor" == msg_title:
+                self.super_succ = msg_obj['payload']
+
+            elif "You good?" == msg_title:
+                client_socket.send("I'm good".encode())
+            
+            elif "Find owner" == msg_title:
+                Thread(target=self.findOwner,args=(msg_obj['payload'],)).start()
+            
+            elif "Found owner" == msg_title:
+                key = msg_obj['payload']['key']
+                owner_addr = msg_obj['payload']['addr']
+                file_path = self.files[key]
+                if owner_addr != self.address: 
+                    Thread(target=self.sendFile,args=(file_path,owner_addr)).start()
+            
+            elif "Get owner" == msg_title:
+                key = msg_obj['payload']['key']
+                query_addr = msg_obj['payload']['query_addr']
+                if tuple(query_addr) != tuple(self.address):
+                    Thread(target=self.get,args=(key,query_addr)).start()
+                else:
+                    print("File Does not exist")
+            
+            elif "Got owner" == msg_title:
+                owner_addr = msg_obj['payload']['owner_addr']
+                requested_file = msg_obj['payload']['key']
+                if owner_addr != self.address:
+                    msg = genMsg("Send file",requested_file,self.address)
+                    sendMsg(owner_addr,msg)
+            
+            elif "Send file" == msg_title:
+                key = int(msg_obj['payload'])
+                print(f"Got send file request for {key}")
+                file_path = self.files[key]
+                self.sendFile(file_path,msg_obj['from'])
+
+            elif "404" == msg_title:
+                print("Requested File not found")
+
+            elif "Fix Find Successor" == msg_title:
+                # print("Handling Find Successor Request")
+                Thread(target=self.fix_find_succ,args=(msg_obj['payload'],)).start()
+                # self.fix_find_succ(msg_obj['payload'])
+            elif "Fix Found Successor" == msg_title:
+                idx = msg_obj['payload']['index']
+                succ = msg_obj['payload']['succ']
+                # print(f"Found entry for index {idx} : {succ}")
+                self.fingerTable[idx] = succ
         except json.JSONDecodeError:
             pass
-        if "Node Join" in msg_title:
-            Thread(target=self.handleNodeJoin,args=(msg_obj,)).start()
-        
-        elif "Find Successor" in msg_title:
-            Thread(target=self.findSuccessor,args=(msg_obj,)).start()
-        
-        elif "I am your predecessor" in msg_title:
-            Thread(target=self.handlePredReq,args=(msg_obj,)).start()
-        
-        elif "Your Successor" in msg_title:
-            self.succ = msg_obj['payload']
-            msg = genMsg("I am your predecessor",self.object,self.address)
-            sendMsg(self.succ['addr'],msg)
-
-        elif "Send Predecessor" in msg_title:
-            msg = genMsg("Requested Predecessor",self.pred,self.address)
-            sendMsg(msg_obj['from'],msg)
-
-        elif "Requested Predecessor" in msg_title:
-            Thread(target=self.checkSuccessor,args=(msg_obj,)).start()
-        
-        elif "Incoming file" in msg_title:
-            filename = msg_obj['payload']
-            Thread(target=self.receiveFile,args=(filename,client_socket)).start()
-        
-        elif "Send Successor" in msg_title:
-            reply = genMsg("Requested Successor",self.succ,self.address)
-            sendMsg(msg_obj['from'],reply)
-        
-        elif "Requested Successor" in msg_title:
-            self.super_succ = msg_obj['payload']
-
-        elif "You good?" in msg_title:
-            client_socket.send("I'm good".encode())
-        
-        elif "Find owner" in msg_title:
-            Thread(target=self.findOwner,args=(msg_obj['payload'],)).start()
-        
-        elif "Found owner" in msg_title:
-            key = msg_obj['payload']['key']
-            owner_addr = msg_obj['payload']['addr']
-            file_path = self.files[key]
-            if owner_addr != self.address: 
-                Thread(target=self.sendFile,args=(file_path,owner_addr)).start()
-        
-        elif "Get owner" in msg_title:
-            key = msg_obj['payload']['key']
-            query_addr = msg_obj['payload']['query_addr']
-            if tuple(query_addr) != tuple(self.address):
-                Thread(target=self.get,args=(key,query_addr)).start()
-            else:
-                print("File Does not exist")
-        
-        elif "Got owner" in msg_title:
-            owner_addr = msg_obj['payload']['owner_addr']
-            requested_file = msg_obj['payload']['key']
-            if owner_addr != self.address:
-                msg = genMsg("Send file",requested_file,self.address)
-                sendMsg(owner_addr,msg)
-        
-        elif "Send file" in msg_title:
-            key = int(msg_obj['payload'])
-            print(f"Got send file request for {key}")
-            file_path = self.files[key]
-            self.sendFile(file_path,msg_obj['from'])
-
-        elif "404" in msg_title:
-            print("Requested File not found")
+        except error:
+            print("Error")
 
     '''
         FUNCTIONS FOR THE "CLIENT" i.e Nodes that want to join a network
